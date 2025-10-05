@@ -23,8 +23,6 @@ dev = [
     "pytest-django",
 ]
 
-[tool.setuptools]
-packages = {find = {}}
-
 [tool.setuptools.packages.find]
+where = ["."]
 include = ["toyo_bucks*"]
