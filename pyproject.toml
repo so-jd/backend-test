@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "toyo-bucks-backend"
+version = "0.1.0"
+description = "Toyo Bucks Django application for Open edX"
+authors = [
+    { name = "Snir Orlanczyk", email = "sorlanczyk@jacksondawson.com" }
+]
+requires-python = ">=3.8"
+dependencies = [
+    "Django>=3.2",
+    "djangorestframework>=3.12",
+    "edx-django-utils>=5.0",
+    "edx-opaque-keys>=2.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-django",
+]
+
+[tool.setuptools]
+packages = ["toyo_bucks"]
