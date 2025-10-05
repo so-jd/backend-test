@@ -24,4 +24,7 @@ dev = [
 ]
 
 [tool.setuptools]
-packages = ["toyo_bucks"]
+packages = {find = {}}
+
+[tool.setuptools.packages.find]
+include = ["toyo_bucks*"]
