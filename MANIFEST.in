@@ -1,3 +1,4 @@
 include README.md
 recursive-include toyo_bucks *.py
 recursive-include toyo_bucks/migrations *.py
+recursive-include toyo_bucks/management *.py
