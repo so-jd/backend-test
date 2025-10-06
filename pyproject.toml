@@ -26,3 +26,9 @@ dev = [
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["toyo_bucks*"]
+
+[project.entry-points."lms.djangoapp"]
+toyo_bucks = "toyo_bucks.apps:ToyoBucksConfig"
+
+[project.entry-points."cms.djangoapp"]
+toyo_bucks = "toyo_bucks.apps:ToyoBucksConfig"

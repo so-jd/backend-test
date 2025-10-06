@@ -23,9 +23,11 @@ class ToyoBucksConfig(AppConfig):
                 # The application namespace to provide to django's urls.include.
                 PluginURLs.APP_NAME: "toyo_bucks",
                 # The regex to provide to django's urls.url.
-                PluginURLs.REGEX: r"^api/toyo-bucks/",
+                # Optional; Defaults to r''.
+                # PluginURLs.REGEX: r"^api/toyo-bucks/",
                 # The python path (relative to this app) to the URLs module to be plugged into the project.
-                PluginURLs.RELATIVE_PATH: "api.urls",
+                # Optional; Defaults to 'urls'.
+                # PluginURLs.RELATIVE_PATH: "urls",
             }
         },
         PluginSettings.CONFIG: {
