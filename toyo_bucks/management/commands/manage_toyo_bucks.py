@@ -4,6 +4,7 @@ Management command for Toyo Bucks rewards
 from decimal import Decimal
 from django.core.management.base import BaseCommand, CommandError
 from django.contrib.auth import get_user_model
+from django.db import models
 from opaque_keys.edx.keys import CourseKey, UsageKey
 from toyo_bucks.models import (
     ToyoBucksAccount,
@@ -36,6 +37,13 @@ class Command(BaseCommand):
         add_all.add_argument('course_key', type=str, help='Course key')
         add_all.add_argument('amount', type=float, help='Reward amount per unit')
 
+        # Add rewards to all blocks in a course
+        add_all_blocks = subparsers.add_parser('add_all_blocks', help='Add rewards to all completable blocks in a course')
+        add_all_blocks.add_argument('course_key', type=str, help='Course key')
+        add_all_blocks.add_argument('amount', type=float, help='Reward amount per block')
+        add_all_blocks.add_argument('--types', type=str, default='problem,video,html,discussion',
+                                     help='Comma-separated block types (default: problem,video,html,discussion)')
+
         # View account
         view_account = subparsers.add_parser('view_account', help='View user account balance')
         view_account.add_argument('username', type=str, help='Username')
@@ -59,6 +67,8 @@ class Command(BaseCommand):
             self.list_rewards(options)
         elif subcommand == 'add_all_units':
             self.add_all_units(options)
+        elif subcommand == 'add_all_blocks':
+            self.add_all_blocks(options)
         elif subcommand == 'view_account':
             self.view_account(options)
         elif subcommand == 'credit':
@@ -177,16 +187,86 @@ class Command(BaseCommand):
         except Exception as e:
             raise CommandError(f'Error: {e}')
 
+    def add_all_blocks(self, options):
+        """Add rewards to all completable blocks in a course"""
+        try:
+            from xmodule.modulestore.django import modulestore
+
+            course_key = CourseKey.from_string(options['course_key'])
+            amount = Decimal(str(options['amount']))
+
+            # Parse block types from comma-separated string
+            block_types = set(t.strip() for t in options['types'].split(','))
+
+            course = modulestore().get_course(course_key)
+            if not course:
+                raise CommandError(f'Course not found: {course_key}')
+
+            # Collect all completable blocks
+            blocks = []
+            for chapter in course.get_children():
+                for sequential in chapter.get_children():
+                    for vertical in sequential.get_children():
+                        for component in vertical.get_children():
+                            # Check if component is of the specified type
+                            if component.location.block_type in block_types:
+                                blocks.append(component.location)
+
+            if not blocks:
+                raise CommandError(f'No completable blocks found in course with types: {", ".join(block_types)}')
+
+            self.stdout.write(f'Found {len(blocks)} completable blocks. Adding {amount} TB to each...\n')
+            self.stdout.write(f'Block types: {", ".join(block_types)}\n')
+
+            created_count = 0
+            updated_count = 0
+
+            for block_key in blocks:
+                reward, created = CourseUnitReward.objects.update_or_create(
+                    unit_key=block_key,
+                    defaults={
+                        'course_key': course_key,
+                        'reward_amount': amount,
+                    }
+                )
+                if created:
+                    created_count += 1
+                else:
+                    updated_count += 1
+
+            total = amount * len(blocks)
+            self.stdout.write(self.style.SUCCESS(
+                f'\n✓ Done! Created: {created_count}, Updated: {updated_count}'
+            ))
+            self.stdout.write(self.style.SUCCESS(
+                f'✓ Total available: {total} TB across {len(blocks)} completable blocks'
+            ))
+
+        except Exception as e:
+            raise CommandError(f'Error: {e}')
+
     def view_account(self, options):
         """View user account"""
         try:
             user = User.objects.get(username=options['username'])
             account, created = ToyoBucksAccount.objects.get_or_create(user=user)
 
+            # Calculate total earned and spent from transactions
+            from django.db.models import Q
+            earned = ToyoBucksTransaction.objects.filter(
+                account=account,
+                transaction_type__in=['reward', 'manual_adjustment']
+            ).aggregate(total=models.Sum('amount'))['total'] or Decimal('0.00')
+
+            spent = ToyoBucksTransaction.objects.filter(
+                account=account,
+                transaction_type='deduction'
+            ).aggregate(total=models.Sum('amount'))['total'] or Decimal('0.00')
+
             self.stdout.write(self.style.MIGRATE_HEADING(f'\nAccount: {user.username}'))
             self.stdout.write(f'Balance: {account.balance} TB')
-            self.stdout.write(f'Total Earned: {account.total_earned} TB')
-            self.stdout.write(f'Total Spent: {account.total_spent} TB')
+            self.stdout.write(f'Total Earned: {earned} TB')
+            self.stdout.write(f'Total Spent: {spent} TB')
 
             # Recent transactions
             recent = ToyoBucksTransaction.objects.filter(account=account).order_by('-created')[:5]
