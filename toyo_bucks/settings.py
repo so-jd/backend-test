@@ -12,7 +12,7 @@ def plugin_settings(settings):
     """
     # Default reward amount for units without specific configuration
     settings.TOYO_BUCKS_DEFAULT_REWARD = getattr(
-        settings, "TOYO_BUCKS_DEFAULT_REWARD", 10.0
+        settings, "TOYO_BUCKS_DEFAULT_REWARD", 5
     )
 
     # Enable/disable auto-awarding on completion
@@ -22,10 +22,10 @@ def plugin_settings(settings):
 
     # Maximum balance a user can have
     settings.TOYO_BUCKS_MAX_BALANCE = getattr(
-        settings, "TOYO_BUCKS_MAX_BALANCE", 999999.99
+        settings, "TOYO_BUCKS_MAX_BALANCE", 999
     )
 
     # Minimum transaction amount
     settings.TOYO_BUCKS_MIN_TRANSACTION = getattr(
-        settings, "TOYO_BUCKS_MIN_TRANSACTION", 0.01
+        settings, "TOYO_BUCKS_MIN_TRANSACTION", 0
     )
