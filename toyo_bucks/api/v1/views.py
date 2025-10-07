@@ -54,7 +54,7 @@ class ToyoBucksAccountViewSet(viewsets.ReadOnlyModelViewSet):
         Returns:
             Account information including balance and statistics
         """
-        account, _ = ToyoBucksAccount.get_or_create_for_user(request.user)
+        account = ToyoBucksAccount.get_or_create_for_user(request.user)
         serializer = self.get_serializer(account)
         return Response(serializer.data)
 

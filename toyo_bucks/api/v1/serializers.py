@@ -3,7 +3,8 @@ Serializers for Toyo Bucks API v1.
 """
 
 from rest_framework import serializers
-
+from django.db.models import Sum
+from decimal import Decimal
 from toyo_bucks.models import (
     CourseUnitReward,
     RewardClaim,
@@ -34,17 +35,19 @@ class ToyoBucksAccountSerializer(serializers.ModelSerializer):
 
     def get_total_earned(self, obj):
         """Calculate total Toyo Bucks earned."""
-        total = sum(
-            t.amount for t in obj.transactions.all() if t.amount > 0
-        )
+        total = obj.transactions.filter(
+            transaction_type__in=['unit_completion', 'manual_adjustment', 'bonus', 'refund']
+        ).aggregate(total=Sum('amount'))['total'] or Decimal('0.00')
+
         return float(total)
 
     def get_total_spent(self, obj):
         """Calculate total Toyo Bucks spent."""
-        total = sum(
-            abs(t.amount) for t in obj.transactions.all() if t.amount < 0
-        )
-        return float(total)
+        total = obj.transactions.filter(
+            transaction_type='store_purchase'
+        ).aggregate(total=Sum('amount'))['total'] or Decimal('0.00')
+
+        return float(abs(total))
 
 
 class ToyoBucksTransactionSerializer(serializers.ModelSerializer):
