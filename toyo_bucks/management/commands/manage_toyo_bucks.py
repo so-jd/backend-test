@@ -41,7 +41,7 @@ class Command(BaseCommand):
         add_all_blocks = subparsers.add_parser('add_all_blocks', help='Add rewards to all completable blocks in a course')
         add_all_blocks.add_argument('course_key', type=str, help='Course key')
         add_all_blocks.add_argument('amount', type=float, help='Reward amount per block')
-        add_all_blocks.add_argument('--types', type=str, default='problem,video,html,discussion',
+        add_all_blocks.add_argument('--types', type=str, default='problem,video,html,discussion,scorm',
                                      help='Comma-separated block types (default: problem,video,html,discussion)')
 
         # View account
