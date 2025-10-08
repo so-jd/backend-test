@@ -104,7 +104,11 @@ class Command(BaseCommand):
                 ('courseware.models', 'StudentModule', 'student', 'course_id'),
                 ('lms.djangoapps.grades.models', 'PersistentCourseGrade', 'user_id', 'course_id'),
                 ('lms.djangoapps.grades.models', 'PersistentSubsectionGrade', 'user_id', 'course_id'),
+                ('submissions.models', 'Submission', 'student_item__student_id', 'student_item__course_id'),
+                ('submissions.models', 'StudentItem', 'student_id', 'course_id'),
+                ('submissions.models', 'Score', 'student_item__student_id', 'student_item__course_id'),
                 ('toyo_bucks.models', 'RewardClaim', 'user', 'unit_key__course_key'),
+                ('toyo_bucks.models', 'ToyoBucksTransaction', 'account__user', 'reference_id__contains'),
             ]
 
             # Count and optionally delete records
@@ -118,11 +122,21 @@ class Command(BaseCommand):
                         # Build query filter
                         if user_field == 'user':
                             filter_kwargs = {user_field: user}
+                        elif user_field.endswith('student_id'):
+                            # Submissions models use username string for student_id
+                            filter_kwargs[user_field] = user.username
                         else:
                             filter_kwargs = {user_field: user.id}
 
                         # Handle course field - some use direct course_key, others nested
-                        if '__' in course_field:
+                        if course_field == 'reference_id__contains':
+                            # Special handling for ToyoBucksTransaction - filter by course key in reference_id
+                            # reference_id contains the unit_key string which includes the course_key
+                            filter_kwargs['reference_id__contains'] = str(course_key)
+                        elif course_field.endswith('course_id'):
+                            # Most models use CourseKey or string representation
+                            filter_kwargs[course_field] = str(course_key)
+                        elif '__' in course_field:
                             # Nested lookup like unit_key__course_key
                             filter_kwargs[course_field] = course_key
                         else:
