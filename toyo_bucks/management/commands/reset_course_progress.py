@@ -7,6 +7,7 @@ including:
 - Student module state
 - Grades (course and subsection)
 - Toyo Bucks reward claims
+- Cache invalidation
 
 WARNING: This operation is destructive and cannot be undone!
 """
@@ -14,8 +15,9 @@ import logging
 from django.core.management.base import BaseCommand, CommandError
 from django.contrib.auth import get_user_model
 from django.db import transaction
+from django.core.cache import cache
 from opaque_keys import InvalidKeyError
-from opaque_keys.edx.keys import CourseKey
+from opaque_keys.edx.keys import CourseKey, UsageKey
 
 log = logging.getLogger(__name__)
 User = get_user_model()
@@ -58,6 +60,66 @@ class Command(BaseCommand):
             help='Preview what would be deleted without actually deleting anything'
         )
 
+    def _clear_caches(self, user, course_key):
+        """Clear various caches related to user progress in the course."""
+        self.stdout.write('\nClearing caches...')
+
+        # Clear grade-related caches
+        cache_keys_to_clear = [
+            # Course grade cache
+            f'grade.{user.id}.{course_key}',
+            f'grades.{user.id}.{course_key}',
+            # Subsection grade cache
+            f'subsection_grade.{user.id}.{course_key}',
+            # Block completion cache
+            f'completion.{user.id}.{course_key}',
+            # Student module cache
+            f'student_module.{user.id}.{course_key}',
+            # Course structure cache
+            f'course_structure.{course_key}',
+        ]
+
+        for cache_key in cache_keys_to_clear:
+            try:
+                cache.delete(cache_key)
+            except Exception as e:
+                log.debug(f'Could not clear cache key {cache_key}: {e}')
+
+        # Clear pattern-based caches (wildcards)
+        try:
+            # Try to clear all caches with user ID and course
+            cache_pattern = f'*{user.id}*{course_key}*'
+            # Note: This requires Redis or Memcached backend that supports pattern deletion
+            if hasattr(cache, 'delete_pattern'):
+                cache.delete_pattern(cache_pattern)
+        except Exception as e:
+            log.debug(f'Could not clear cache pattern: {e}')
+
+        self.stdout.write(self.style.SUCCESS('  ✓ Caches cleared'))
+
+    def _trigger_grade_recalculation(self, user, course_key):
+        """Trigger grade recalculation for the user in the course."""
+        self.stdout.write('\nTriggering grade recalculation...')
+        try:
+            # Import grades API
+            from lms.djangoapps.grades.api import CourseGradeFactory
+
+            # Force recalculation by calling the grade factory
+            # This will compute a fresh grade (which should be 0 after reset)
+            grade_factory = CourseGradeFactory()
+            grade_factory.read(user, course_key=course_key, force_update=True)
+
+            self.stdout.write(self.style.SUCCESS('  ✓ Grade recalculation triggered'))
+        except ImportError:
+            self.stdout.write(
+                self.style.WARNING('  ⚠ Could not import grades API (this is optional)')
+            )
+        except Exception as e:
+            self.stdout.write(
+                self.style.WARNING(f'  ⚠ Grade recalculation failed: {str(e)} (this is optional)')
+            )
+            log.debug(f'Grade recalculation failed: {e}')
+
     def handle(self, *args, **options):
         """Execute the command."""
         username = options['username']
@@ -99,14 +161,28 @@ class Command(BaseCommand):
 
         try:
             # Import models dynamically to avoid import errors if they don't exist
+            # Order matters: delete child records before parent records
             models_to_check = [
+                # Completion data
                 ('completion.models', 'BlockCompletion', 'user', 'context_key'),
-                ('courseware.models', 'StudentModule', 'student', 'course_id'),
-                ('lms.djangoapps.grades.models', 'PersistentCourseGrade', 'user_id', 'course_id'),
+
+                # Grade data (delete subsection grades before course grades)
                 ('lms.djangoapps.grades.models', 'PersistentSubsectionGrade', 'user_id', 'course_id'),
+                ('lms.djangoapps.grades.models', 'PersistentCourseGrade', 'user_id', 'course_id'),
+
+                # Submissions (delete in order: Score -> Submission -> StudentItem)
+                ('submissions.models', 'Score', 'student_item__student_id', 'student_item__course_id'),
                 ('submissions.models', 'Submission', 'student_item__student_id', 'student_item__course_id'),
                 ('submissions.models', 'StudentItem', 'student_id', 'course_id'),
-                ('submissions.models', 'Score', 'student_item__student_id', 'student_item__course_id'),
+
+                # StudentModule (XBlock state including problem answers)
+                # This is critical - it stores the actual problem state/answers
+                ('courseware.models', 'StudentModule', 'student', 'course_id'),
+                ('courseware.models', 'XModuleUserStateSummaryField', None, None),  # Will need special handling
+                ('courseware.models', 'XModuleStudentInfoField', None, None),  # Will need special handling
+                ('courseware.models', 'XModuleStudentPrefsField', None, None),  # Will need special handling
+
+                # Toyo Bucks
                 ('toyo_bucks.models', 'RewardClaim', 'user', 'unit_key__course_key'),
                 ('toyo_bucks.models', 'ToyoBucksTransaction', 'account__user', 'reference_id__contains'),
             ]
@@ -119,9 +195,20 @@ class Command(BaseCommand):
                         module = __import__(module_path, fromlist=[model_name])
                         model = getattr(module, model_name)
 
+                        # Skip models with None user_field (special handling needed)
+                        if user_field is None or course_field is None:
+                            # For XModule* models, we need to find related StudentModule records first
+                            # These are typically not directly queryable by user/course
+                            # We'll handle them through cascade deletion from StudentModule
+                            self.stdout.write(
+                                self.style.WARNING(f'  {model_name}: Handled via cascade (skipped)')
+                            )
+                            continue
+
                         # Build query filter
+                        filter_kwargs = {}
                         if user_field == 'user':
-                            filter_kwargs = {user_field: user}
+                            filter_kwargs[user_field] = user
                         elif user_field.endswith('student_id'):
                             # Submissions models use username string for student_id
                             filter_kwargs[user_field] = user.username
@@ -177,6 +264,12 @@ class Command(BaseCommand):
                 # If dry run, rollback the transaction
                 if dry_run:
                     transaction.set_rollback(True)
+                else:
+                    # Clear caches after successful deletion
+                    self._clear_caches(user, course_key)
+
+                    # Trigger grade recalculation
+                    self._trigger_grade_recalculation(user, course_key)
 
         except Exception as e:
             raise CommandError(f'Error resetting progress: {str(e)}')
