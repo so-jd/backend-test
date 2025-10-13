@@ -372,13 +372,12 @@ class Command(BaseCommand):
                 created=completion_date
             )
 
-            # Create RewardClaim record
+            # Create RewardClaim record (only if not exists - created field is auto-set)
             RewardClaim.objects.get_or_create(
                 user=user,
                 unit_key=block_key,
                 defaults={
-                    'claimed_at': completion_date,
-                    'amount': amount
+                    'reward_amount': amount
                 }
             )
 

@@ -211,8 +211,7 @@ def _award_toyo_bucks(user, block_key: UsageKey, amount: Decimal, completion_dat
             user=user,
             unit_key=block_key,
             defaults={
-                'claimed_at': completion_date,
-                'amount': amount
+                'reward_amount': amount
             }
         )
 
