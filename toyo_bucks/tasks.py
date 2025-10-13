@@ -192,17 +192,20 @@ def _award_toyo_bucks(user, block_key: UsageKey, amount: Decimal, completion_dat
         ).exists():
             return False
 
+        # Update balance first
+        account.balance += amount
+        account.save()
+
+        # Create transaction with balance_after
         ToyoBucksTransaction.objects.create(
             account=account,
             amount=amount,
             transaction_type='reward',
+            balance_after=account.balance,
             reference_id=reference_id,
             description=f'Legacy import: {block_key.block_id}',
             created=completion_date
         )
-
-        account.balance += amount
-        account.save()
 
         RewardClaim.objects.get_or_create(
             user=user,
