@@ -107,7 +107,12 @@ class Command(BaseCommand):
             # Force recalculation by calling the grade factory
             # This will compute a fresh grade (which should be 0 after reset)
             grade_factory = CourseGradeFactory()
-            grade_factory.read(user, course_key=course_key, force_update=True)
+            # Try different API signatures (it varies by Open edX version)
+            try:
+                grade_factory.read(user, course_key=course_key)
+            except TypeError:
+                # Older API without course_key parameter
+                grade_factory.read(user, course_key)
 
             self.stdout.write(self.style.SUCCESS('  ✓ Grade recalculation triggered'))
         except ImportError:
@@ -177,13 +182,10 @@ class Command(BaseCommand):
 
                 # StudentModule (XBlock state including problem answers)
                 # This is critical - it stores the actual problem state/answers
-                ('courseware.models', 'StudentModule', 'student', 'course_id'),
-                ('courseware.models', 'XModuleUserStateSummaryField', None, None),  # Will need special handling
-                ('courseware.models', 'XModuleStudentInfoField', None, None),  # Will need special handling
-                ('courseware.models', 'XModuleStudentPrefsField', None, None),  # Will need special handling
+                ('lms.djangoapps.courseware.models', 'StudentModule', 'student', 'course_id'),
 
-                # Toyo Bucks
-                ('toyo_bucks.models', 'RewardClaim', 'user', 'unit_key__course_key'),
+                # Toyo Bucks (special handling for RewardClaim with custom query)
+                ('toyo_bucks.models', 'RewardClaim', 'user', 'SPECIAL_REWARD_CLAIM'),
                 ('toyo_bucks.models', 'ToyoBucksTransaction', 'account__user', 'reference_id__contains'),
             ]
 
@@ -203,6 +205,32 @@ class Command(BaseCommand):
                             self.stdout.write(
                                 self.style.WARNING(f'  {model_name}: Handled via cascade (skipped)')
                             )
+                            continue
+
+                        # Special handling for RewardClaim
+                        if course_field == 'SPECIAL_REWARD_CLAIM':
+                            # RewardClaim has a UsageKeyField that needs special handling
+                            # We need to filter by checking if the unit_key starts with the course_key
+                            queryset = model.objects.filter(user=user)
+                            # Filter in Python to match course
+                            matching_claims = []
+                            for claim in queryset:
+                                if claim.unit_key and str(claim.unit_key).startswith(str(course_key)):
+                                    matching_claims.append(claim.id)
+
+                            if matching_claims:
+                                queryset = model.objects.filter(id__in=matching_claims)
+                                count = len(matching_claims)
+                                stats[model_name] = count
+                                self.stdout.write(f'  {model_name}: {count} record(s) found')
+
+                                if not dry_run:
+                                    deleted_count, _ = queryset.delete()
+                                    self.stdout.write(
+                                        self.style.SUCCESS(f'    ✓ Deleted {deleted_count} record(s)')
+                                    )
+                            else:
+                                stats[model_name] = 0
                             continue
 
                         # Build query filter

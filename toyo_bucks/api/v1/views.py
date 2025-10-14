@@ -331,3 +331,123 @@ class CourseUnitRewardViewSet(viewsets.ReadOnlyModelViewSet):
                 },
                 status=status.HTTP_404_NOT_FOUND,
             )
+
+    @action(detail=False, methods=["get"])
+    def by_sequence(self, request):
+        """
+        Get aggregated reward information for a sequence (subsection/module).
+
+        This endpoint aggregates all block-level rewards within a sequence's units
+        and returns the total rewards and claimed rewards for that sequence.
+
+        Query parameters:
+            - sequence_key: The sequence usage key (e.g., block-v1:...)
+            - course_key: The course key (required to fetch course structure)
+
+        Returns:
+            {
+                "sequence_key": "block-v1:...",
+                "total_rewards": 150.0,
+                "claimed_rewards": 50.0,
+                "units": [
+                    {
+                        "unit_key": "block-v1:...",
+                        "rewards": 50.0,
+                        "claimed": 25.0
+                    },
+                    ...
+                ]
+            }
+        """
+        from opaque_keys.edx.keys import CourseKey
+        from xmodule.modulestore.django import modulestore
+
+        sequence_key_str = request.query_params.get("sequence_key")
+        course_key_str = request.query_params.get("course_key")
+
+        if not sequence_key_str:
+            return Response(
+                {"error": "sequence_key parameter is required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if not course_key_str:
+            return Response(
+                {"error": "course_key parameter is required"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            sequence_key = UsageKey.from_string(sequence_key_str)
+            course_key = CourseKey.from_string(course_key_str)
+        except InvalidKeyError as e:
+            return Response(
+                {"error": f"Invalid key: {str(e)}"},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # Get the sequence from modulestore
+        store = modulestore()
+        try:
+            sequence = store.get_item(sequence_key)
+        except Exception as e:
+            log.error(f"Error fetching sequence {sequence_key}: {e}")
+            return Response(
+                {"error": f"Sequence not found: {sequence_key_str}"},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        # Get all units (verticals) in this sequence
+        units = sequence.get_children()
+
+        total_rewards = 0.0
+        claimed_rewards = 0.0
+        units_data = []
+
+        for unit in units:
+            if unit.location.block_type != 'vertical':
+                continue
+
+            unit_key = unit.location
+
+            # Get all blocks within this unit
+            unit_blocks = unit.get_children()
+            unit_total = 0.0
+            unit_claimed = 0.0
+
+            for block in unit_blocks:
+                block_key = block.location
+
+                # Check if there's a reward configured for this block
+                try:
+                    reward = CourseUnitReward.objects.get(
+                        unit_key=block_key,
+                        is_active=True
+                    )
+                    reward_amount = float(reward.reward_amount)
+                    unit_total += reward_amount
+
+                    # Check if user has claimed this block's reward
+                    if RewardClaim.has_claimed(request.user, block_key):
+                        unit_claimed += reward_amount
+
+                except CourseUnitReward.DoesNotExist:
+                    # No reward for this block
+                    pass
+
+            total_rewards += unit_total
+            claimed_rewards += unit_claimed
+
+            if unit_total > 0:  # Only include units that have rewards
+                units_data.append({
+                    "unit_key": str(unit_key),
+                    "rewards": unit_total,
+                    "claimed": unit_claimed,
+                })
+
+        return Response({
+            "sequence_key": sequence_key_str,
+            "total_rewards": total_rewards,
+            "claimed_rewards": claimed_rewards,
+            "units": units_data,
+        })
