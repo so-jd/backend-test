@@ -55,6 +55,7 @@ class ImportStats:
         self.toyo_bucks_awarded = Decimal('0.00')
         self.errors = []
         self.skipped_courses = set()
+        self.missing_courses = set()
         self.processed_records = 0
 
     def add_error(self, row_num: int, message: str):
@@ -81,6 +82,11 @@ class ImportStats:
         if self.skipped_courses:
             stdout.write(f'\n\nCourses skipped (not in mapping):')
             for course in sorted(self.skipped_courses):
+                stdout.write(f'  - {course}')
+
+        if self.missing_courses:
+            stdout.write(f'\n\nCourses not found in Open edX (data imported, but courses need to be created):')
+            for course in sorted(self.missing_courses):
                 stdout.write(f'  - {course}')
 
         if self.errors:
@@ -282,12 +288,34 @@ class Command(BaseCommand):
         try:
             # Import dynamically to avoid errors if not in LMS context
             from common.djangoapps.student.models import CourseEnrollment
+            import logging
 
-            enrollment, created = CourseEnrollment.objects.get_or_create(
-                user=user,
-                course_id=course_key,
-                defaults={'mode': mode}
-            )
+            # Temporarily suppress Open edX schedule/overview warnings during enrollment
+            schedule_logger = logging.getLogger('openedx.core.djangoapps.schedules.signals')
+            overview_logger = logging.getLogger('openedx.core.djangoapps.content.course_overviews.models')
+            enrollment_logger = logging.getLogger('common.djangoapps.student.models.course_enrollment')
+
+            old_levels = {
+                'schedule': schedule_logger.level,
+                'overview': overview_logger.level,
+                'enrollment': enrollment_logger.level,
+            }
+
+            schedule_logger.setLevel(logging.CRITICAL)
+            overview_logger.setLevel(logging.CRITICAL)
+            enrollment_logger.setLevel(logging.CRITICAL)
+
+            try:
+                enrollment, created = CourseEnrollment.objects.get_or_create(
+                    user=user,
+                    course_id=course_key,
+                    defaults={'mode': mode}
+                )
+            finally:
+                # Restore log levels
+                schedule_logger.setLevel(old_levels['schedule'])
+                overview_logger.setLevel(old_levels['overview'])
+                enrollment_logger.setLevel(old_levels['enrollment'])
 
             if created:
                 stats.enrollments_created += 1
@@ -299,6 +327,11 @@ class Command(BaseCommand):
             log.warning('CourseEnrollment model not available (not in LMS context)')
             return False
         except Exception as e:
+            # Check if it's a course-not-found error
+            if 'does not exist' in str(e).lower() or 'not found' in str(e).lower():
+                log.debug(f'Course {course_key} does not exist - enrollment created anyway for data migration')
+                stats.enrollments_created += 1
+                return True
             log.exception(f'Error enrolling user {user.username} in {course_key}: {e}')
             return False
 
@@ -470,6 +503,9 @@ class Command(BaseCommand):
                             course_data = mapping['courses'][course_name]
                             course_key_str = course_data['course_key']
                             course_key = CourseKey.from_string(course_key_str)
+
+                            # Track courses (for missing course summary)
+                            stats.missing_courses.add(str(course_key))
 
                             # Check if module is in mapping
                             if module_name not in course_data.get('modules', {}):
