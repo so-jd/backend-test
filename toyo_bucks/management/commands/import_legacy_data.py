@@ -522,7 +522,11 @@ class Command(BaseCommand):
                                 continue
 
                             # Enroll user in course
-                            self._enroll_user_in_course(user, course_key, default_mode, stats)
+                            enrollment_success = self._enroll_user_in_course(user, course_key, default_mode, stats)
+
+                            # If enrollment succeeded, remove from missing courses
+                            if enrollment_success:
+                                stats.missing_courses.discard(str(course_key))
 
                             # Parse completion date
                             completion_date = self._parse_date(completion_date_str)
